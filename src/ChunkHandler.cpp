@@ -1,8 +1,10 @@
 #include "..\header\ChunkHandler.h"
 #include <iostream>
 
-ChunkHandler::ChunkHandler(unsigned int _gridSize, unsigned int _nrVertices, float _spacing, float _yscale)
-	: gridSize{ (_gridSize % 2 == 0 ? (_gridSize + 1) : _gridSize) }, nrVertices{ _nrVertices }, spacing{ _spacing }, yscale{ _yscale }, currentChunk{ nullptr }
+ChunkHandler::ChunkHandler(unsigned int _gridSize, unsigned int _nrVertices, float _spacing,
+	std::function<void(ChunkHandler&, float,float,float,float)> func, const Biome& _biomeGenerator)	
+		: gridSize{ (_gridSize % 2 == 0 ? (_gridSize + 1) : _gridSize) }, nrVertices{ _nrVertices }, spacing{ _spacing }, currentChunk{ nullptr },
+		callbackfunc{ func }, biomeGenerator{ _biomeGenerator }
 {
 	//unsigned int size = nrVertices; //two extra rows / columns for the skirts
 	unsigned int lod = 1;
@@ -13,43 +15,18 @@ ChunkHandler::ChunkHandler(unsigned int _gridSize, unsigned int _nrVertices, flo
 		for (int col = 0; col < gridSize; ++col) {
 			float xpos = -width * (static_cast<float>(gridSize) / 2.0f) + col * width;
 
-			chunks.push_back(new Chunk{ nrVertices, lod, xpos, zpos, spacing, index(col, row, gridSize) });
+			chunks.push_back(new Chunk{ nrVertices, lod, xpos, zpos, spacing, index(col, row, gridSize), biomeGenerator});
 			chunks.back()->bakeMeshes();
 
+			//Create trees in new chunk using callback function, p1 - p2 creates bounding grid 
+			auto chunk = chunks.back();
+			auto p1 = chunk->getPostition(0); //first vertex 
+			auto p2 = chunk->getPostition(chunk->index(chunk->nrVertices - 1, chunk->nrVertices - 1)); //last vertex
+
+			callbackfunc(*this, p1.x, p2.x, p1.z, p2.z);
 		}
 	}
 	currentChunk = chunks[gridSize * gridSize / 2];
-}
- 
-glm::vec3 ChunkHandler::Chunk::createPointWithNoise(float x, float z, float* minY, float* maxY ) const {
-	/*** Apply noise to the height ie. y component using fbm ***/
-	int octaves = 6;
-	float noiseSum = 0.0f;
-	float seed = 0.1f;
-	float amplitude = 6.0f;
-	float gain = 0.5; //How much to increase / decrease each octave
-	float lacunarity = 2.0; //How much to increase / decrease frequency each octave ie. how big steps to take in the noise space
-	float freq = 0.09f;
-
-	//Add noise from all octaves
-	for (int i = 0; i < octaves; ++i) {
-		noiseSum += amplitude * glm::perlin(glm::vec3((x + 1) * freq, (z + 1) * freq, seed));
-		freq *= lacunarity;
-		amplitude *= gain;
-	}
-
-	float noiseY = noiseSum;
-	float groundlevel = -1.51f;
-	if (noiseY < groundlevel)
-		noiseY = groundlevel;
-
-	glm::vec3 pos{ x, noiseY, z };
-
-	if (minY != nullptr && maxY != nullptr) {
-		*minY = *minY > noiseY ? noiseY : *minY;
-		*maxY = *maxY < noiseY ? noiseY : *maxY;
-	}
-	return pos;
 }
 
 std::pair<float, float> ChunkHandler::Chunk::computeXZpos(int width, int depth) const {
@@ -60,7 +37,8 @@ std::pair<float, float> ChunkHandler::Chunk::computeXZpos(int width, int depth) 
 
 glm::vec3 ChunkHandler::Chunk::createFakeVertex(int width, int depth) const {
 	auto [x, z] = computeXZpos(width, depth);
-	return createPointWithNoise(x, z);
+	return biomeGenerator.computeVertexPointFromBiomes(x, z);
+	//return createPointWithNoise(x, z);
 }
 
 glm::vec3 ChunkHandler::Chunk::computeNormal(const std::vector<glm::vec3>& p,const glm::vec3& v0) const {
@@ -121,12 +99,12 @@ glm::vec3 ChunkHandler::Chunk::setColorFromLOD() {
 	}
 }
 
-ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xpos, float zpos, float _spacing, unsigned int _id) :
-	lod{ _lod }, nrVertices { (_nrVertices - 1) / _lod + 3 }, XPOS{ xpos }, ZPOS{ zpos }, SPACING{ _spacing * _lod }, id{ _id } {
+ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xpos, float zpos, float _spacing, unsigned int _id, const Biome& _biomeGenerator) :
+	lod{ _lod }, nrVertices{ (_nrVertices - 1) / _lod + 3 }, XPOS{ xpos }, ZPOS{ zpos }, SPACING{ _spacing * _lod }, id{ _id }, biomeGenerator{ _biomeGenerator } {
 	int MAXLOD = 16;
 	unsigned int newLod = _lod * 2;
 	if (newLod <= MAXLOD)
-		higherLod = new Chunk{ _nrVertices, newLod, xpos, zpos, _spacing, 0 };
+		higherLod = new Chunk{ _nrVertices, newLod, xpos, zpos, _spacing, 0, biomeGenerator };
 		//auto future = std::async(generateLOD, this, _nrVertices, newLod, xpos, zpos, _spacing, _id);
 		//Chunk* temp = future.get();
 	else
@@ -163,15 +141,19 @@ ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xp
 
 			if (depth == 0 || depth == nrVertices - 1 || width == 0 || width == nrVertices - 1) //edges of grid ie. skirts
 			{
-				float skirtDepth = -3.0f;
+				float skirtDepth = -5.0f;
 				glm::vec3 pos{ x, skirtDepth, z };
 				vertices.push_back({ pos });
 			}
 			else //Non edges compute noise value for the y-component
 			{
-				auto pos = createPointWithNoise(x, z, &minY, &maxY);
-				vertices.push_back({ pos });
+				//auto pos = createPointWithNoise(x, z, &minY, &maxY);
+				auto pos2 = biomeGenerator.computeVertexPointFromBiomes(x, z, &minY, &maxY);
+				vertices.push_back({ pos2 });
 			}
+
+			//Set vertex colors
+			biomeGenerator.setColorFromBiome(vertices.back(), x, z);
 			vertices.back().color = color;
 			if (depth == 0 || depth == nrVertices - 1 || width == 0 || width == nrVertices - 1) //edges of grid ie. skirts
 			{
@@ -214,7 +196,7 @@ ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xp
 		glm::vec3 ne, n, nw, w, sw, s, se, e;
 		//Find all surrounding vertices 
 
-		//NE och SW behövs ej
+		//NE och SW behï¿½vs ej
 		s = vertices[index(width, depth + 1)].position;
 		nw = createFakeVertex(width - 1, depth - 1);
 		n = createFakeVertex(width, depth - 1);
@@ -358,10 +340,19 @@ ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xp
 		}
 	}
 
-	//mesh = Mesh{ vertices, indices }; 
+	glm::vec3 ground{ 0.0f, 1.0f, 0.0f };
+	for (Vertex& vert : vertices) {
+		float angle = std::acosf(glm::dot(vert.normal, ground)) * 180 / 3.14f;
+		if (angle < 40 && vert.position.y > -1.5f)
+		{
+			vert.normalcolor = glm::vec3{ 0.0f, 1.0f, 0.0f };
+		}
+		else
+			vert.normalcolor = glm::vec3{ 1.0f, 0.0f, 0.0f };
+	}
 
 	//create boundingbox ignoring the extra row and column added by the skirts
-	//max x and z already had size - 1 before skirts were added 
+	//max x and z already had (nrVertices - 1) before skirts were added. Skirt adds 2 extra row / columns so use (nrVertices - 3) 
 	float minX = xpos;
 	float maxX = xpos + (nrVertices - 3) * SPACING;
 	float minZ = zpos;
@@ -370,6 +361,7 @@ ChunkHandler::Chunk::Chunk(unsigned int _nrVertices, unsigned int _lod, float xp
 	//Important theese are given in correct order -> see BoundingBox.h ctor
 	points = std::vector<glm::vec3>{ { minX, maxY, minZ }, { maxX, maxY, minZ }, { maxX, maxY, maxZ }, { minX, maxY, maxZ },
 				{ minX, minY, minZ }, { maxX, minY, minZ }, { maxX, minY, maxZ }, { minX, minY, maxZ } };
+
 }
 
 chunkChecker ChunkHandler::Chunk::checkMovement(const glm::vec3& pos)
@@ -377,6 +369,7 @@ chunkChecker ChunkHandler::Chunk::checkMovement(const glm::vec3& pos)
 	chunkChecker cc = inside;
 	auto v1 = mesh.vertices[0].position; //first vertex in chunk
 	auto v2 = mesh.vertices[mesh.vertices.size() - 1].position; // last vertex in chunk
+	//std::cout << " p1 " << glm::to_string(v1) << " p2 " << glm::to_string(v2) << '\n';
 
 	//Check if position is within chunk borders spanned by v1 and v2 in the x,z plane
 	if (pos.z < v1.z) {
@@ -442,17 +435,16 @@ chunkChecker ChunkHandler::checkChunk(const glm::vec3& camPos)
 /// <param name="inside"></param>
 void ChunkHandler::generateChunk(const std::pair<float, float>& newPos, unsigned int nrVeritices, float _spacing, unsigned int id, chunkChecker cc)
 {
-	Chunk* chunk = new Chunk{ nrVertices, 1, newPos.first, newPos.second, _spacing, id };
+	Chunk* chunk = new Chunk{ nrVertices, 1, newPos.first, newPos.second, _spacing, id, biomeGenerator };
 	//std::future<Chunk*> ret = std::async();
 
 	renderQ.push({ chunk, cc });
 }
 
 ChunkHandler::Chunk* ChunkHandler::Chunk::generateLOD(unsigned int nrVerticies, unsigned int _lod, float xpos, float zpos, float _spacing, unsigned int id) {
-	Chunk* chunkLOD = new Chunk{ nrVerticies, _lod, xpos, zpos, _spacing, id };
+	Chunk* chunkLOD = new Chunk{ nrVerticies, _lod, xpos, zpos, _spacing, id, biomeGenerator };
 	return chunkLOD;
 }
-
 
 /// <summary>
 /// Updates which chunks that are rendered based on camera position. New chunks are genereted by multi-threading.
@@ -555,6 +547,12 @@ void ChunkHandler::updateChunks(const glm::vec3& camPos)
 		
 		Chunk* newChunk = std::get<Chunk*>(ci);
 		newChunk->bakeMeshes();
+
+		//Generate new trees in chunk
+		auto p1 = newChunk->getPostition(0); //first vertex 
+		auto p2 = newChunk->getPostition(newChunk->index(newChunk->nrVertices - 1, newChunk->nrVertices - 1)); //last vertex
+
+		callbackfunc(*this, p1.x, p2.x, p1.z, p2.z);
 
 		Chunk* temp;
 		unsigned int id = newChunk->id;

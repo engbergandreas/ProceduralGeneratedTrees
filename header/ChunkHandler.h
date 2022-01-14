@@ -10,6 +10,7 @@
 #include <thread>
 #include <mutex>
 #include <future>
+#include "Biome.h"
 
 enum chunkChecker {
 	inside, up, down, left, right
@@ -24,8 +25,11 @@ public:
 	/// <param name="nrVertices">number of vertecies per chunk excluding skirts</param>
 	/// <param name="spacing">distance between vertices</param>
 	/// <param name="yscale">how much to scale in the y direction</param>
-	ChunkHandler(unsigned int _gridSize, unsigned int _nrVertices, float _spacing, float _yscale);
+	ChunkHandler(unsigned int _gridSize, unsigned int _nrVertices, float _spacing, std::function<void(ChunkHandler&, float, float, float, float)> func, const Biome& _biomeGenerator);
 
+	void nrofchunks() {
+		std::cout << "current chunks in list: " << chunks.size() << '\n';
+	}
 
 	void cullTerrain(bool cull) {
 		for (auto chunk : chunks) {
@@ -79,6 +83,13 @@ public:
 	}
 
 	/// <summary>
+	/// return vec3 position at width, depth x,z
+	/// </summary>
+	glm::vec3 getPointOnTerrain(float x, float z) {
+		return biomeGenerator.computeVertexPointFromBiomes(x, z);
+	}
+
+	/// <summary>
 	/// Update chunk the camera is currently over ie. get center chunk
 	/// </summary>
 	/// <param name="ch">what chunk direction did we move into</param>
@@ -101,7 +112,7 @@ private:
 		/// <param name="xpos">start position x</param>
 		/// <param name="zpos">start position z</param>
 		/// <param name="_spacing">how much space between each vertex</param>
-		Chunk(unsigned int _size, unsigned int lod, float xpos, float zpos, float _spacing, unsigned int _id);
+		Chunk(unsigned int _size, unsigned int lod, float xpos, float zpos, float _spacing, unsigned int _id, const Biome& _biomeGenerator);
 		//Chunk(const std::vector<Vertex>& vertices, const std::vector<unsigned int>& indices, const std::vector<glm::vec3>& bBox, size_t _size);
 
 		~Chunk() {
@@ -137,12 +148,7 @@ private:
 
 		void bakeMeshes();
 
-		/// <summary>
-		/// Create noisy point at position x,z computes height y
-		/// https://thebookofshaders.com/13/
-		/// TODO: make noise dependent on variables
-		/// </summary>
-		glm::vec3 createPointWithNoise(float x, float z, float* minY = nullptr, float* maxY = nullptr) const;
+
 		/// <summary>
 		/// Helper function computes x & z position in grid
 		/// </summary>
@@ -182,6 +188,7 @@ private:
 		unsigned int id;
 		unsigned int lod;
 		const unsigned int nrVertices;	//Number of vertices in chunk
+		const Biome& biomeGenerator;
 
 
 
@@ -219,14 +226,16 @@ private:
 	const unsigned int gridSize;
 	const unsigned int nrVertices;
 	const float spacing;
-	const float yscale;
 
 	int renderCounter{ static_cast<int>(gridSize) };
 
 	Chunk* currentChunk;
 	std::vector<Chunk*> chunks;
+	const Biome& biomeGenerator;
 
 	using chunkInfo = std::tuple<Chunk*, chunkChecker>;
 	std::queue<chunkInfo> renderQ;
 	std::queue<chunkChecker> moveQ;
+
+	std::function<void(ChunkHandler&, float, float, float, float)> callbackfunc;
 };

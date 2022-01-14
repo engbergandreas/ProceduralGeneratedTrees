@@ -11,6 +11,10 @@ struct Vertex
 	glm::vec3 position;
 	glm::vec3 normal = glm::vec3{ 0.0f };
 	glm::vec3 color = glm::vec3{ 0.0f };
+	glm::vec3 heatcolor = glm::vec3{ 0.0f };
+	glm::vec3 moistcolor = glm::vec3{ 0.0f };
+	glm::vec3 biomecolor = glm::vec3{ 0.0f };
+	glm::vec3 normalcolor = glm::vec3{ 0.0f };
 };
 
 class Mesh
